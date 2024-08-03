@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"time"
@@ -13,58 +12,56 @@ import (
 func main() {
 	broker := os.Getenv("KAFKA_BROKER")
 
-	admClient, err := kafka.NewAdminClient(&kafka.ConfigMap{"bootstrap.servers": broker})
-
+	client, err := NewKafkaAdminClient(broker)
 	if err != nil {
-		log.Fatalf("Failed to create Kafka admin client: %s", err)
+		log.Fatalf("failed to create Kafka admin client: %s", err)
 	}
+	defer client.Close()
 
-	defer admClient.Close()
-
-	var newTopics []kafka.TopicSpecification
-	topics := createTopics()
-
-	for _, topic := range topics {
-		newTopics = append(newTopics, kafka.TopicSpecification{
-			Topic:             topic,
-			NumPartitions:     1,
-			ReplicationFactor: 1,
-		})
-	}
+	topic := NewKafkaTopic(os.Getenv("KAFKA_TOPIC"), 4, 1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	results, err := admClient.CreateTopics(ctx, newTopics)
-
+	err = CreateTopicsInKafka(ctx, client, []kafka.TopicSpecification{topic})
 	if err != nil {
-		log.Fatalf("Failed to create topics: %v", err)
-	}
-
-	for _, result := range results {
-		if result.Error.Code() != kafka.ErrNoError {
-			log.Printf("Failed to create topic %s: %s\n", result.Topic, result.Error.String())
-		} else {
-			log.Printf("Topic %s created successfully\n", result.Topic)
-		}
+		log.Fatalf("failed to create topics: %v", err)
 	}
 
 }
 
-func createTopics() []string {
-	ranges := [4][2]rune{
-		{'a', 'g'},
-		{'h', 'n'},
-		{'o', 's'},
-		{'t', 'z'},
+func NewKafkaAdminClient(broker string) (*kafka.AdminClient, error) {
+	client, err := kafka.NewAdminClient(&kafka.ConfigMap{"bootstrap.servers": broker})
+
+	if err != nil {
+		return nil, err
 	}
 
-	var topics []string
+	return client, nil
+}
 
-	for _, r := range ranges {
-		topic := fmt.Sprintf("topic-letters-%v-to-%v", string(r[0]), string(r[1]))
-		topics = append(topics, topic)
+func CreateTopicsInKafka(ctx context.Context, client *kafka.AdminClient, topics []kafka.TopicSpecification) error {
+	results, err := client.CreateTopics(ctx, topics)
+
+	if err != nil {
+		return err
 	}
 
-	return topics
+	for _, result := range results {
+		if result.Error.Code() != kafka.ErrNoError {
+			log.Printf("failed to create topic %s: %s\n", result.Topic, result.Error.String())
+		} else {
+			log.Printf("topic '%s' created successfully\n", result.Topic)
+		}
+	}
+
+	return nil
+}
+
+func NewKafkaTopic(name string, partitions int, replicationFactor int) kafka.TopicSpecification {
+	return kafka.TopicSpecification{
+		Topic:             name,
+		NumPartitions:     partitions,
+		ReplicationFactor: replicationFactor,
+	}
 }
